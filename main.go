@@ -17,7 +17,7 @@ import (
 const (
     prometheusURL       = "http://localhost:9090"
 	productCode     = "STRATIO"
-	customerIdentifier = "YOUR_CUSTOMER_IDENTIFIER"
+	customerIdentifier = "CUSTOMER"
 	dimensionName    = "CPU"
 )
 
@@ -40,7 +40,7 @@ func main() {
         log.Fatal("Error getting CPU capacity: ", err)
     }
 
-	metricValue := float64(cpuCapacity[0].Value)
+	metricValue := int64(cpuCapacity[0].Value)
 	metricTimestamp := cpuCapacity[0].Timestamp.Time()
 
 
@@ -63,15 +63,16 @@ func getCPUCapacity(promAPI v1.API) (model.Vector, error) {
     return cpuCapacity, nil
 }
 
-func sendMeteringRecords(value float64, timestamp time.Time) {
+func sendMeteringRecords(value int64, timestamp time.Time) {
+    timezone, _ := time.LoadLocation("UTC")
 	meteringRecords := &marketplacemetering.BatchMeterUsageInput{
 		ProductCode: aws.String(productCode), // Required
 		UsageRecords: []*marketplacemetering.UsageRecord{ // Required
 			{ // Required
-				CustomerIdentifier: aws.String("CustomerIdentifier"), // Required
-				Dimension:          aws.String("UsageDimension"),     // Required
-				Quantity:           aws.Int64(1),                     // Required
-				Timestamp:          aws.Time(timestamp),             // Required
+				CustomerIdentifier: aws.String(customerIdentifier), // Required
+				Dimension:          aws.String(dimensionName),     // Required
+				Quantity:           aws.Int64(value),               // Required
+				Timestamp:          aws.Time(timestamp.In(timezone)),              // Required
 			},
 		},
 	}

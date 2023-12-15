@@ -14,12 +14,17 @@ const (
 	prometheusURL      = "http://localhost:9090"
 	productCode        = "STRATIO"
 	customerIdentifier = "CUSTOMER"
-	cpuDimension       = "CPU"
-	memDimension       = "MEM"
-	storageDimension   = "STORAGE"
-	cpuQuery           = "billing:cpu_usage:last1h"
-	memQuery           = "billing:mem_usage:last1h"
-	storageQuery       = "billing:storage_usage:last1h"
+)
+
+type Dimension struct {
+	name string
+	promQuery string
+}
+
+var (
+	cpuCapacity    = Dimension{"cpu", "billing:cpu_usage:last1h"}
+	memCapacity    = Dimension{"memory", "billing:mem_usage:last1h"}
+	storageCapacity = Dimension{"storage", "billing:storage_usage:last1h"}
 )
 
 func main() {
@@ -34,7 +39,6 @@ func main() {
     for range ticker.C {
         run()
     }
-
 }
 
 func run() {
@@ -44,23 +48,24 @@ func run() {
 		return
 	}
 
-	cpuMetricValue, cpuMetricTimestamp, err := prometheus.GetMetric(promAPI, cpuQuery)
+	cpuMetricValue, cpuMetricTimestamp, err := prometheus.GetMetric(promAPI, cpuCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting CPU capacity: %v", err)
 		return
 	}
 
-	memMetricValue, memMetricTimestamp, err := prometheus.GetMetric(promAPI, memQuery)
+	memMetricValue, memMetricTimestamp, err := prometheus.GetMetric(promAPI, memCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting MEM capacity: %v", err)
 		return
 	}
 
-	storageMetricValue, storageMetricTimestamp, err := prometheus.GetMetric(promAPI, storageQuery)
+	storageMetricValue, storageMetricTimestamp, err := prometheus.GetMetric(promAPI, storageCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting STORAGE capacity: %v", err)
 		return
 	}
 
 	fmt.Println(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
+	// aws.SendMeteringRecords(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
 }

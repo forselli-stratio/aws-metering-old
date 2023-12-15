@@ -21,7 +21,7 @@ func InitPrometheusAPI(prometheusURL string) (v1.API, error) {
 	return v1.NewAPI(promClient), nil
 }
 
-func GetMetric(promAPI v1.API, query string) (int64, time.Time, error) {
+func RunPromQuery(promAPI v1.API, query string) (int64, time.Time, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, warnings, err := promAPI.Query(ctx, query, time.Now(), v1.WithTimeout(5*time.Second))

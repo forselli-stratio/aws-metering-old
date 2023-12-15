@@ -47,25 +47,24 @@ func run() {
 		log.Printf("Error creating Prometheus client: %v", err)
 		return
 	}
-
-	cpuMetricValue, cpuMetricTimestamp, err := prometheus.GetMetric(promAPI, cpuCapacity.promQuery)
+	cpuMetricValue, cpuMetricTimestamp, err := prometheus.RunPromQuery(promAPI, cpuCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting CPU capacity: %v", err)
 		return
 	}
 
-	memMetricValue, memMetricTimestamp, err := prometheus.GetMetric(promAPI, memCapacity.promQuery)
+	memMetricValue, memMetricTimestamp, err := prometheus.RunPromQuery(promAPI, memCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting MEM capacity: %v", err)
 		return
 	}
 
-	storageMetricValue, storageMetricTimestamp, err := prometheus.GetMetric(promAPI, storageCapacity.promQuery)
+	storageMetricValue, storageMetricTimestamp, err := prometheus.RunPromQuery(promAPI, storageCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting STORAGE capacity: %v", err)
 		return
 	}
 
 	fmt.Println(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
-	// aws.SendMeteringRecords(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
+	aws.SendMeteringRecords(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
 }

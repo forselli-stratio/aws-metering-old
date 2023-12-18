@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-
 func InitPrometheusAPI(prometheusURL string) (v1.API, error) {
 	promClient, err := api.NewClient(api.Config{
 		Address: prometheusURL,

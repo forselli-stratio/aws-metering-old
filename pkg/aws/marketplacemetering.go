@@ -2,12 +2,13 @@ package aws
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/marketplacemetering"
+	"github.com/forselli-stratio/aws-metering/pkg/metrics"
 )
 
 func CreateMeteringRecords(productCode string, customerIdentifier string, cpuValue, memValue, storageValue int64, cpuTimestamp, memTimestamp, storageTimestamp time.Time) (*marketplacemetering.BatchMeterUsageInput) {
@@ -45,15 +46,15 @@ func SendMeteringRecords(m *marketplacemetering.BatchMeterUsageInput) marketplac
 	// Role. These credentials will be used to to make the STS Assume Role API.
 	mySession := session.Must(session.NewSession())
 	svc := marketplacemetering.New(mySession, aws.NewConfig().WithRegion("eu-west-1"))
-	req, err := svc.BatchMeterUsage(m)
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			fmt.Println(aerr)
-		}
+	req, resp := svc.BatchMeterUsageRequest(m)
+	err := req.Send()
+	metrics.RequestsTotal.WithLabelValues(strconv.Itoa(req.HTTPResponse.StatusCode)).Inc()
+	if err != nil { // resp is now filled
+		fmt.Println(err)
 	}
 	if err == nil { // resp is now filled
 		fmt.Println("New meteringrecord sent")
     	fmt.Println(req)
 	}
-	return *req
+	return *resp
 }

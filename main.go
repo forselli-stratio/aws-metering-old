@@ -4,10 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
-	aws "github.com/forselli-stratio/aws-metering/pkg/aws"
-	prometheus "github.com/forselli-stratio/aws-metering/pkg/prometheus"
+	awscli "github.com/forselli-stratio/aws-metering/pkg/aws"
+	"github.com/forselli-stratio/aws-metering/pkg/metrics"
+	promcli "github.com/forselli-stratio/aws-metering/pkg/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -30,6 +33,14 @@ var (
 func main() {
 	interval := flag.Duration("interval", time.Hour, "Execution interval duration (e.g., 1h)")
 	flag.Parse()
+
+	// Register the metrics endpoint
+	http.Handle("/metrics", promhttp.Handler())
+	go func() {
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+	metrics.RegisterMetrics()
+
 	// Run the initial execution
 	run()
 
@@ -42,29 +53,29 @@ func main() {
 }
 
 func run() {
-	promAPI, err := prometheus.InitPrometheusAPI(prometheusURL)
+	promAPI, err := promcli.InitPrometheusAPI(prometheusURL)
 	if err != nil {
 		log.Printf("Error creating Prometheus client: %v", err)
 		return
 	}
-	cpuMetricValue, cpuMetricTimestamp, err := prometheus.RunPromQuery(promAPI, cpuCapacity.promQuery)
+	cpuMetricValue, cpuMetricTimestamp, err := promcli.RunPromQuery(promAPI, cpuCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting CPU capacity: %v", err)
 		return
 	}
 
-	memMetricValue, memMetricTimestamp, err := prometheus.RunPromQuery(promAPI, memCapacity.promQuery)
+	memMetricValue, memMetricTimestamp, err := promcli.RunPromQuery(promAPI, memCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting MEM capacity: %v", err)
 		return
 	}
 
-	storageMetricValue, storageMetricTimestamp, err := prometheus.RunPromQuery(promAPI, storageCapacity.promQuery)
+	storageMetricValue, storageMetricTimestamp, err := promcli.RunPromQuery(promAPI, storageCapacity.promQuery)
 	if err != nil {
 		log.Printf("Error getting STORAGE capacity: %v", err)
 		return
 	}
 
-	fmt.Println(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
-	aws.SendMeteringRecords(aws.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
+	fmt.Println(awscli.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
+	awscli.SendMeteringRecords(awscli.CreateMeteringRecords(productCode, customerIdentifier, cpuMetricValue, memMetricValue, storageMetricValue, cpuMetricTimestamp, memMetricTimestamp, storageMetricTimestamp))
 }

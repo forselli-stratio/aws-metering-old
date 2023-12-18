@@ -16,7 +16,3 @@ var (
 func RegisterMetrics() {
     prometheus.MustRegister(RequestsTotal)
 }
-
-func Test(){
-    RequestsTotal.WithLabelValues("200").Inc()
-}

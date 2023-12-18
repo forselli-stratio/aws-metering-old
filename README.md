@@ -2,20 +2,6 @@
 
 https://awsmp-loadforms.s3.amazonaws.com/AWS+Marketplace+-+SaaS+Integration+Guide.pdf
 
-```
-spec:
-  productCode: "Stratio"
-  customerIdentifier: "Customer"
-  dimenssions:
-    - name: cpu
-      prometheusQuery: "billing:cpu_usage:last1h"
-    - name: mem
-      prometheusQuery: "billing:mem_usage:last1h"
-    - name: storage
-      prometheusQuery: "billing:storage_usage:last1h"
-
-```
-
 Funcionamiento:
 
 1. Aplicación arranca y envía registros del momento actual obteniendo los datos con query a prometheus

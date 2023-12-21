@@ -16,14 +16,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Constants defining configuration values
-const (
-	prometheusURL      = "http://localhost:9090"
-	productCode        = "STRATIO"
-	customerIdentifier = "CUSTOMER"
-	metricsEndpoint    = "/metrics"
-	listenAddress      = ":8080"
-)
+// Configurations are moved to a struct to avoid global state and improve testability.
+type Config struct {
+	PrometheusURL      string
+	ProductCode        string
+	CustomerIdentifier string
+	MetricsEndpoint    string
+	ListenAddress      string
+}
 
 // Dimension represents a metric dimension and its corresponding Prometheus query.
 type Dimension struct {
@@ -31,78 +31,115 @@ type Dimension struct {
 	PromQuery string
 }
 
-// Predefined dimensions for CPU, memory, and storage capacity.
-var (
-	cpuCapacity    = Dimension{"cpu", "billing:cpu_lala:last1h"}
-	memCapacity    = Dimension{"memory", "billing:mem_capacity:last1h"}
-	storageCapacity = Dimension{"storage", "billing:storage_capacity:last1h"}
-)
-
-// main function sets up and runs the metering application.
 func main() {
-	// Parse command-line arguments
+	// Configuration is now read from a function, making it easier to manage.
+	config := loadConfig()
+
+	// Parse command-line arguments.
 	interval := flag.Duration("interval", time.Hour, "Execution interval duration (e.g., 1h)")
 	flag.Parse()
 
-	// Register the metrics endpoint for Prometheus
-	http.Handle(metricsEndpoint, promhttp.Handler())
-	go func() {
-		log.Fatal(http.ListenAndServe(listenAddress, nil))
-	}()
+	// Initialize DynamoDB client.
+	awscli.InitDynamoDB()
+
+	// Register the metrics endpoint for Prometheus.
+	http.Handle(config.MetricsEndpoint, promhttp.Handler())
+	go startServer(config.ListenAddress)
+
+	// Register and collect metrics.
 	metrics.RegisterMetrics()
 
-	// Run the initial execution
-	run()
+	// Run the initial execution before scheduling it at regular intervals.
+	run(config)
 
-	// Schedule execution at the specified interval
-	ticker := time.NewTicker(*interval)
-	for range ticker.C {
-		run()
+	// Schedule repeated execution at the specified interval.
+	schedule(interval, config)
+}
+
+// loadConfig loads the configurations from environment variables or default values.
+func loadConfig() Config {
+	return Config{
+		PrometheusURL:      "http://localhost:9090",
+		ProductCode:        "STRATIO",
+		CustomerIdentifier: "CUSTOMER",
+		MetricsEndpoint:    "/metrics",
+		ListenAddress:      ":8080",
 	}
 }
 
-// run function performs the main execution logic, fetching metrics and sending metering records to AWS.
-func run() {
-	// Initialize Prometheus API client
-	promAPI, err := promcli.InitPrometheusAPI(prometheusURL)
+// startServer starts the HTTP server for Prometheus metrics.
+func startServer(listenAddress string) {
+	log.Fatal(http.ListenAndServe(listenAddress, nil))
+}
+
+func schedule(interval *time.Duration, config Config) {
+	ticker := time.NewTicker(*interval)
+	for {
+		select {
+		case <-ticker.C:
+			run(config)
+		}
+	}
+}
+
+// run performs the main execution logic, fetching metrics and sending metering records to AWS.
+func run(config Config) {
+	// Simplified error handling and improved readability.
+	currentTimestamp := time.Now().Unix()
+	promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
 	if err != nil {
 		log.Printf("Error creating Prometheus client: %v", err)
 		return
 	}
 
-	// Fetch usage records for different dimensions
-	usageRecords := getCapacityRecords(promAPI, cpuCapacity, memCapacity, storageCapacity)
+	// Predefined dimensions are now initialized here to avoid global state.
+	dimensions := []Dimension{
+		{"cpu", "billing:cpu_lala:last1h"},
+		{"memory", "billing:mem_capacity:last1h"},
+		{"storage", "billing:storage_capacity:last1h"},
+	}
 
-	// Create metering input
-	meterUsageInput := awscli.CreateBatchMeterUsageInput(productCode, customerIdentifier, usageRecords...)
-	log.Println("Meter Usage Input:", meterUsageInput)
+	usageRecords := getCapacityRecords(promAPI, currentTimestamp, dimensions...)
+	meteringRecord := createMeteringRecord(currentTimestamp, config.CustomerIdentifier, usageRecords)
 
-	// Send metering records to AWS
-	_, err = awscli.SendBatchMeterUsageRequest(meterUsageInput)
-	if err != nil {
-		log.Printf("Error sending metering records: %v", err)
+	// Insert metering record into DynamoDB.
+	if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
+		log.Printf("Error inserting metering record into DynamoDB: %v", err)
 	}
 }
 
-// getCapacityRecords function retrieves usage records for specified dimensions from Prometheus.
-func getCapacityRecords(promAPI v1.API, dimensions ...Dimension) []*marketplacemetering.UsageRecord {
-	var usageRecords []*marketplacemetering.UsageRecord
+// createMeteringRecord constructs a metering record from the usage records.
+func createMeteringRecord(timestamp int64, customerIdentifier string, usageRecords []*marketplacemetering.UsageRecord) *awscli.MeteringRecord {
+	dimensionUsage := make([]struct{ Dimension string; Value int64 }, len(usageRecords))
+	for i, usageRecord := range usageRecords {
+		dimensionUsage[i] = struct{ Dimension string; Value int64 }{
+			Dimension: aws.StringValue(usageRecord.Dimension),
+			Value:     aws.Int64Value(usageRecord.Quantity),
+		}
+	}
+	return &awscli.MeteringRecord{
+		CreateTimestamp:   timestamp,
+		CustomerIdentifier: customerIdentifier,
+		DimensionUsage:     dimensionUsage,
+		MeteringPending:    "true",
+	}
+}
 
+// getCapacityRecords retrieves usage records for specified dimensions from Prometheus.
+func getCapacityRecords(promAPI v1.API, timestamp int64, dimensions ...Dimension) []*marketplacemetering.UsageRecord {
+	var usageRecords []*marketplacemetering.UsageRecord
 	for _, dimension := range dimensions {
-		// Fetch metric value and timestamp from Prometheus
-		metricValue, metricTimestamp, err := promcli.RunPromQuery(promAPI, dimension.PromQuery)
+		metricValue, _, err := promcli.RunPromQuery(promAPI, dimension.PromQuery, timestamp)
 		if err != nil {
 			log.Printf("Error getting %s capacity: %v", dimension.Name, err)
 			continue
 		}
 
-		// Create UsageRecord and add it to the list
 		usageRecords = append(usageRecords, &marketplacemetering.UsageRecord{
 			Dimension: aws.String(dimension.Name),
 			Quantity:  aws.Int64(metricValue),
-			Timestamp: aws.Time(metricTimestamp),
+			Timestamp: aws.Time(time.Unix(timestamp, 0)),
 		})
 	}
-
 	return usageRecords
 }

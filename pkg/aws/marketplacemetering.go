@@ -2,58 +2,80 @@ package aws
 
 import (
 	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/marketplacemetering"
+	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/forselli-stratio/aws-metering/pkg/metrics"
 )
 
-func CreateBatchMeterUsageInput(productCode string, customerIdentifier string, records ...*marketplacemetering.UsageRecord) *marketplacemetering.BatchMeterUsageInput {
-	timezone, _ := time.LoadLocation("UTC")
-	meteringRecords := &marketplacemetering.BatchMeterUsageInput{
-		ProductCode: aws.String(productCode),
-		UsageRecords: records,
+// DynamoDBTableName is the name of the DynamoDB table
+const DynamoDBTableName = "AWSMarketplaceMeteringRecords"
+
+// MeteringRecord represents a metering record to be stored in DynamoDB.
+type MeteringRecord struct {
+	CreateTimestamp   int64
+	CustomerIdentifier string
+	DimensionUsage     []struct {
+		Dimension string
+		Value     int64
 	}
-
-    // Set common fields for all records
-    for _, record := range records {
-        record.CustomerIdentifier = aws.String(customerIdentifier)
-        record.Timestamp = aws.Time(record.Timestamp.In(timezone))
-    }
-
-	return meteringRecords
+	MeteringPending string
 }
 
-func SendBatchMeterUsageRequest(m *marketplacemetering.BatchMeterUsageInput) (*marketplacemetering.BatchMeterUsageOutput, error) {
+var dynamoDBClient *dynamodb.DynamoDB
+
+// InitDynamoDB initializes the DynamoDB client
+func InitDynamoDB() {
 	// Create a new session with default credentials
-	// Initial credentials loaded from SDK's default credential chain. Such as
-	// the environment, shared credentials (~/.aws/credentials), or EC2 Instance
-	// Role. These credentials will be used to to make the STS Assume Role API.
+	// Initial credentials loaded from SDK's default credential chain.
 	mySession := session.Must(session.NewSession())
 
-	// Create a Marketplace Metering service client
-	svc := marketplacemetering.New(mySession, aws.NewConfig().WithRegion("ea-west-1"))
+	// Create a DynamoDB service client
+	dynamoDBClient = dynamodb.New(mySession, aws.NewConfig().WithEndpoint("http://localhost:8000"), aws.NewConfig().WithRegion("eu-west-1"))
+}
 
-	// Create BatchMeterUsage request
-	req, resp := svc.BatchMeterUsageRequest(m)
-
-	// Send the request
-	err := req.Send()
-
-	// Update metrics with request status code
-	metrics.RequestsTotal.WithLabelValues(strconv.Itoa(req.HTTPResponse.StatusCode)).Inc()
-
-	// Handle errors
-	if err != nil {
-		return nil, fmt.Errorf("%v", err)
+// InsertMeteringRecord inserts a metering record into DynamoDB
+func InsertMeteringRecord(record *MeteringRecord) error {
+	// Create DynamoDB item
+	item := map[string]*dynamodb.AttributeValue{
+		"create_timestamp": {
+			N: aws.String(fmt.Sprintf("%d", record.CreateTimestamp)),
+		},
+		"customerIdentifier": {
+			S: aws.String(record.CustomerIdentifier),
+		},
+		"dimension_usage": {
+			M: map[string]*dynamodb.AttributeValue{},
+		},
+		"metering_pending": {
+			S: aws.String(record.MeteringPending),
+		},
 	}
 
-	// Log successful request
-	fmt.Println("New metering record sent:")
-	fmt.Println(req)
+	// Add dimension usage to DynamoDB item
+	for _, usage := range record.DimensionUsage {
+		item["dimension_usage"].M[usage.Dimension] = &dynamodb.AttributeValue{
+			N: aws.String(fmt.Sprintf("%d", usage.Value)),
+		}
+	}
 
-	return resp, nil
+	// Create DynamoDB input
+	input := &dynamodb.PutItemInput{
+		Item:      item,
+		TableName: aws.String(DynamoDBTableName),
+	}
+
+	// Perform PutItem operation
+	_, err := dynamoDBClient.PutItem(input)
+
+	// Update metrics with DynamoDB operation status
+	if err != nil {
+		metrics.DynamoDBErrorsTotal.Inc()
+	} else {
+		fmt.Println("Succesfully uploaded data do DynamoDB")
+		metrics.DynamoDBPutItemTotal.Inc()
+	}
+
+	return err
 }

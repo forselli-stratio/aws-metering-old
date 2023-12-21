@@ -3,13 +3,6 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-    RequestsTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "aws_metering_batchmeterusage_requests_total",
-            Help: "The total number of HTTP requests to the AWS metering service.",
-        },
-        []string{"status"}, // Label to indicate response status code
-    )
     PrometheusQuerySuccessesTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
             Name: "aws_metering_prometheus_query_successes_total",
@@ -24,10 +17,24 @@ var (
         },
         []string{"query"}, // Labels to indicate response status code and query performed
     )
+	// New Prometheus metrics for DynamoDB operations
+	DynamoDBErrorsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aws_metering_dynamodb_errors_total",
+			Help: "The total number of errors in DynamoDB operations.",
+		},
+	)
+	DynamoDBPutItemTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aws_metering_dynamodb_put_item_total",
+			Help: "The total number of successful PutItem operations in DynamoDB.",
+		},
+	)
 )
 
 func RegisterMetrics() {
-    prometheus.MustRegister(RequestsTotal)
     prometheus.MustRegister(PrometheusQuerySuccessesTotal)
     prometheus.MustRegister(PrometheusQueryErrorsTotal)
+	prometheus.MustRegister(DynamoDBErrorsTotal)
+	prometheus.MustRegister(DynamoDBPutItemTotal)
 }

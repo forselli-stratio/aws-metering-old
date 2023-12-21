@@ -26,13 +26,13 @@ func InitPrometheusAPI(prometheusURL string) (v1.API, error) {
 
 // RunPromQuery executes a Prometheus query using the provided Prometheus API client and query string.
 // It returns the metric value, timestamp, and an error if the query execution encounters any issues.
-func RunPromQuery(promAPI v1.API, query string) (int64, time.Time, error) {
+func RunPromQuery(promAPI v1.API, query string, timestamp int64) (int64, time.Time, error) {
 	// Set up a context with a timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Execute Prometheus query
-	result, warnings, err := promAPI.Query(ctx, query, time.Now(), v1.WithTimeout(5*time.Second))
+	// Execute Prometheus query with the provided timestamp
+	result, warnings, err := promAPI.Query(ctx, query, time.Unix(timestamp, 0), v1.WithTimeout(5*time.Second))
 	if err != nil {
 		// Increment Prometheus query error metric
 		metrics.PrometheusQueryErrorsTotal.WithLabelValues(query).Inc()

@@ -24,10 +24,10 @@ var (
 			Help: "The total number of errors in DynamoDB operations.",
 		},
 	)
-	DynamoDBPutItemTotal = prometheus.NewCounter(
+	DynamoDBOperationsTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aws_metering_dynamodb_put_item_total",
-			Help: "The total number of successful PutItem operations in DynamoDB.",
+			Name: "aws_metering_dynamodb_operations_total",
+			Help: "The total number of operations in DynamoDB.",
 		},
 	)
 )
@@ -36,5 +36,5 @@ func RegisterMetrics() {
     prometheus.MustRegister(PrometheusQuerySuccessesTotal)
     prometheus.MustRegister(PrometheusQueryErrorsTotal)
 	prometheus.MustRegister(DynamoDBErrorsTotal)
-	prometheus.MustRegister(DynamoDBPutItemTotal)
+	prometheus.MustRegister(DynamoDBOperationsTotal)
 }

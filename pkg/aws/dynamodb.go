@@ -2,6 +2,7 @@ package aws
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -32,7 +33,11 @@ func InitDynamoDB() {
 	mySession := session.Must(session.NewSession())
 
 	// Create a DynamoDB service client
-	dynamoDBClient = dynamodb.New(mySession, aws.NewConfig().WithEndpoint("http://localhost:8000"), aws.NewConfig().WithRegion("eu-west-1"))
+	dynamoDBClient = dynamodb.New(mySession, &aws.Config{
+		Endpoint: aws.String("http://localhost:8000"),
+		Region:   aws.String("eu-west-1"),
+		MaxRetries: aws.Int(3),
+	})
 }
 
 // InsertMeteringRecord inserts a metering record into DynamoDB
@@ -70,11 +75,11 @@ func InsertMeteringRecord(record *MeteringRecord) error {
 	_, err := dynamoDBClient.PutItem(input)
 
 	// Update metrics with DynamoDB operation status
+	metrics.DynamoDBOperationsTotal.Inc()
 	if err != nil {
 		metrics.DynamoDBErrorsTotal.Inc()
 	} else {
-		fmt.Println("Succesfully uploaded data do DynamoDB")
-		metrics.DynamoDBPutItemTotal.Inc()
+		log.Printf("Succesfully uploaded data do DynamoDB")
 	}
 
 	return err

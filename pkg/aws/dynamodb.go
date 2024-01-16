@@ -41,12 +41,8 @@ func InitDynamoDB() {
 }
 
 // CheckIfRecordExists checks if a metering record exists for the specified time interval
-func CheckIfRecordExists(record *MeteringRecord) bool {
-    // Determine the start of the current hour
-    now := time.Now()
-    startOfCurrentHour := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, now.Location()).Unix()
-
-    // Create a query input to check for existing records in the current hour
+func CheckIfRecordExists(customerIdentifier string, startTime, endTime int64) bool {
+    // Create a query input to check for existing records within the current hour interval
     queryInput := &dynamodb.QueryInput{
         TableName: aws.String(DynamoDBTableName),
         KeyConditions: map[string]*dynamodb.Condition{
@@ -54,15 +50,18 @@ func CheckIfRecordExists(record *MeteringRecord) bool {
                 ComparisonOperator: aws.String("EQ"),
                 AttributeValueList: []*dynamodb.AttributeValue{
                     {
-                        S: aws.String(record.CustomerIdentifier),
+                        S: aws.String(customerIdentifier),
                     },
                 },
             },
             "create_timestamp": {
-                ComparisonOperator: aws.String("GE"),
+                ComparisonOperator: aws.String("BETWEEN"),
                 AttributeValueList: []*dynamodb.AttributeValue{
                     {
-                        N: aws.String(fmt.Sprintf("%d", startOfCurrentHour)),
+                        N: aws.String(fmt.Sprintf("%d", startTime)),
+                    },
+                    {
+                        N: aws.String(fmt.Sprintf("%d", endTime)),
                     },
                 },
             },
@@ -77,13 +76,14 @@ func CheckIfRecordExists(record *MeteringRecord) bool {
 		return false
 	}
 
-	// Check if a record exists in the current hour
-	if *result.Count > 0 {
-		log.Printf("A record for this customer already exists in the current hour.")
-		return true
-	}
-
-	return false
+    // Check if any items were returned
+    exists := len(result.Items) > 0
+    if exists {
+        humanReadableStartTime := time.Unix(startTime, 0).Format("2006-01-02 15:04:05")
+        humanReadableEndTime := time.Unix(endTime, 0).Format("2006-01-02 15:04:05")
+        log.Printf("Record already exists for customer '%s' between %s and %s", customerIdentifier, humanReadableStartTime, humanReadableEndTime)
+    }
+    return exists
 }
 
 // InsertMeteringRecord inserts a metering record into DynamoDB
@@ -120,6 +120,12 @@ func InsertMeteringRecord(record *MeteringRecord) error {
 		item["dimension_usage"].L = append(item["dimension_usage"].L, dimensionUsageItem)
 	}
 
+    // Check if dimension_usage is empty or has less than 3 items
+    if len(item["dimension_usage"].L) < 3 {
+        log.Printf("Skipping metering record upload to DynamoDB as dimension_usage is empty or incomplete.")
+        return nil
+    }
+
 	// Create DynamoDB input
 	input := &dynamodb.PutItemInput{
 		Item:      item,
@@ -134,9 +140,8 @@ func InsertMeteringRecord(record *MeteringRecord) error {
 	if err != nil {
 		log.Printf("Error uploading data to DynamoDB: %s", err)
 		metrics.DynamoDBErrorsTotal.Inc()
-	} else {
-		log.Printf("Successfully uploaded data to DynamoDB")
+		return err
 	}
-
+	log.Printf("Successfully uploaded record for customer %s to DynamoDB from date: %d", record.CustomerIdentifier, record.CreateTimestamp)
 	return err
 }

@@ -109,28 +109,40 @@ func schedule(interval *time.Duration, config Config) {
 
 // run performs the main execution logic, fetching metrics and sending metering records to AWS.
 func run(config Config) {
-	currentTimestamp := time.Now().Unix()
-	promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
-	if err != nil {
-		log.Printf("Error creating Prometheus client: %v", err)
-		return
-	}
+    currentTime := time.Now()
+    // Round down to the nearest hour
+    roundedCurrentTime := currentTime.Truncate(time.Hour)
 
-	dimensions := []Dimension{
-		{"cpu", "billing:cpu_capacity:last1h"},
-		{"memory", "billing:mem_capacity:last1h"},
-		{"storage", "billing:storage_capacity:last1h"},
-	}
+    for i := 1; i <= 6; i++ {
+        // Calculate the start of each past natural hour
+        naturalHourStart := roundedCurrentTime.Add(-time.Duration(i) * time.Hour)
+        naturalHourEnd := naturalHourStart.Add(time.Hour)
 
-	meteringRecord := createMeteringRecord(currentTimestamp, config.CustomerIdentifier, dimensions, promAPI)
-	// TODO: REMOVE
-	fmt.Println(meteringRecord)
-	if recordExists := awscli.CheckIfRecordExists(meteringRecord); !recordExists{
-		// Insert metering record into DynamoDB.
-		if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
-			log.Printf("Error inserting metering record into DynamoDB: %v", err)
-		}
-	}
+        // Check if there is already a record for this interval in DynamoDB
+        if !awscli.CheckIfRecordExists(config.CustomerIdentifier, naturalHourStart.Unix(), naturalHourEnd.Unix()) {
+            // Run the Prometheus query for this specific hour
+            promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
+            if err != nil {
+                log.Printf("Error creating Prometheus client: %v", err)
+                continue
+            }
+
+            dimensions := []Dimension{
+                {"cpu", "billing:cpu_capacity:last1h"},
+                {"memory", "billing:mem_capacity:last1h"},
+                {"storage", "billing:storage_capacity:last1h"},
+            }
+
+            // Using the end time of the natural hour as the timestamp for the query
+            meteringRecord := createMeteringRecord(naturalHourEnd.Unix(), config.CustomerIdentifier, dimensions, promAPI)
+            fmt.Println(meteringRecord)
+            // Insert metering record into DynamoDB
+            if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
+                log.Printf("Error inserting metering record into DynamoDB: %v", err)
+                return
+            }
+        }
+    }
 }
 
 // createMeteringRecord constructs a metering record directly from the Prometheus query results.
@@ -140,8 +152,8 @@ func createMeteringRecord(timestamp int64, customerIdentifier string, dimensions
 	for _, dimension := range dimensions {
 		_, _, err := promcli.RunPromQuery(promAPI, dimension.PromQuery, timestamp)
 		if err != nil {
-			log.Printf("Error querying %s with %s: %v", dimension.Name, dimension.PromQuery, err)
-			continue
+            humanReadableTimestamp := time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
+			log.Printf("Error querying %s with %s at %s: %v", dimension.Name, dimension.PromQuery, humanReadableTimestamp, err)
 		}
 
 		dimensionUsage = append(dimensionUsage, struct{ Dimension string; Value int64 }{

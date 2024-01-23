@@ -137,11 +137,5 @@ func InsertMeteringRecord(record *MeteringRecord) error {
 
 	// Update metrics with DynamoDB operation status
 	metrics.DynamoDBOperationsTotal.Inc()
-	if err != nil {
-		log.Printf("Error uploading data to DynamoDB: %s", err)
-		metrics.DynamoDBErrorsTotal.Inc()
-		return err
-	}
-	log.Printf("Successfully uploaded record for customer %s to DynamoDB from date: %d", record.CustomerIdentifier, record.CreateTimestamp)
 	return err
 }

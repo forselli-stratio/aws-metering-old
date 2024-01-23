@@ -21,7 +21,7 @@ type Config struct {
 	CustomerIdentifier string
 	MetricsEndpoint    string
 	ListenAddress      string
-	Interval		   string
+	Interval		   time.Duration
 }
 
 // Dimension represents a metric dimension and its corresponding Prometheus query.
@@ -31,52 +31,58 @@ type Dimension struct {
 }
 
 func main() {
-	// Configuration is now read from a function, making it easier to manage.
-	config := loadConfig()
-	log.Printf("Configuration loaded: %+v", config)
-
-	// Initialize DynamoDB client.
-	awscli.InitDynamoDB()
+	// Load configuration from environment variables.
+	config, err := loadConfig()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+    log.Printf("Configuration loaded: %+v", config)
 
 	// Register the metrics endpoint for Prometheus.
 	http.Handle(config.MetricsEndpoint, promhttp.Handler())
 	go startServer(config.ListenAddress)
 
+	// Initialize DynamoDB client.
+	awscli.InitDynamoDB()
+
 	// Register and collect metrics.
 	metrics.RegisterMetrics()
 
-	// Schedule repeated execution at the specified interval.
-	timeInterval, err := time.ParseDuration(config.Interval)
-	if err != nil {
-		fmt.Println("Error parsing interval:", err)
-		return
-	}
-	schedule(&timeInterval, config)
+    // Schedule repeated execution at the specified interval
+	schedule(&config.Interval, config)
 }
 
 // loadConfig loads the configurations from environment variables or default values.
-func loadConfig() Config {
+func loadConfig() (Config, error) {
     // Retrieve mandatory configuration parameters from environment variables
     prometheusURL := os.Getenv("PROMETHEUS_URL")
     customerIdentifier := os.Getenv("CUSTOMER_IDENTIFIER")
-	interval := os.Getenv("INTERVAL")
+    interval := os.Getenv("INTERVAL")
 
     // Check if mandatory environment variables are set
     if prometheusURL == "" || customerIdentifier == "" || interval == "" {
-        log.Fatalf("Required environment variables 'PROMETHEUS_URL', 'CUSTOMER_IDENTIFIER' or 'INTERVAL' are not set")
+        return Config{}, fmt.Errorf("missing required environment variables 'PROMETHEUS_URL', 'CUSTOMER_IDENTIFIER', or 'INTERVAL'")
     }
+
+	// Schedule repeated execution at the specified interval.
+	timeInterval, err := time.ParseDuration(interval)
+	if err != nil {
+        return Config{}, fmt.Errorf("error parsing interval: %v", err)
+	}
 
     // Set defaults for optional parameters if they are not provided
     metricsEndpoint := getEnv("METRICS_ENDPOINT", "/metrics")
     listenAddress := getEnv("LISTEN_ADDRESS", ":8080")
 
-    return Config{
-        PrometheusURL:      prometheusURL,
+    config := Config{
+        PrometheusURL: prometheusURL,
         CustomerIdentifier: customerIdentifier,
-        MetricsEndpoint:    metricsEndpoint,
-        ListenAddress:      listenAddress,
-		Interval: 			interval,
+        MetricsEndpoint: metricsEndpoint,
+        ListenAddress: listenAddress,
+        Interval: timeInterval,
     }
+
+    return config, nil
 }
 
 // getEnv retrieves an environment variable or returns a default value.
@@ -97,6 +103,7 @@ func startServer(listenAddress string) {
 
 func schedule(interval *time.Duration, config Config) {
     // Execute once immediately.
+    log.Printf("Uploading data to DynamoDB.")
     run(config)
 
 	// Continue with scheduled execution.
@@ -116,10 +123,10 @@ func run(config Config) {
     for i := 1; i <= 6; i++ {
         // Calculate the start of each past natural hour
         naturalHourStart := roundedCurrentTime.Add(-time.Duration(i) * time.Hour)
-        naturalHourEnd := naturalHourStart.Add(time.Hour)
+        naturalHourEnd := naturalHourStart.Add(time.Hour).Unix()
 
         // Check if there is already a record for this interval in DynamoDB
-        if !awscli.CheckIfRecordExists(config.CustomerIdentifier, naturalHourStart.Unix(), naturalHourEnd.Unix()) {
+        if !awscli.CheckIfRecordExists(config.CustomerIdentifier, naturalHourStart.Unix(), naturalHourEnd) {
             // Run the Prometheus query for this specific hour
             promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
             if err != nil {
@@ -134,13 +141,20 @@ func run(config Config) {
             }
 
             // Using the end time of the natural hour as the timestamp for the query
-            meteringRecord := createMeteringRecord(naturalHourEnd.Unix(), config.CustomerIdentifier, dimensions, promAPI)
+            meteringRecord := createMeteringRecord(naturalHourEnd, config.CustomerIdentifier, dimensions, promAPI)
             fmt.Println(meteringRecord)
+            // Check if dimension_usage is empty or has less than 3 items
+            if len(meteringRecord.DimensionUsage) < len(dimensions) {
+                log.Printf("Skipping metering record upload to DynamoDB as dimension_usage is empty or incomplete.")
+            }
+
             // Insert metering record into DynamoDB
             if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
+                metrics.DynamoDBErrorsTotal.Inc()
                 log.Printf("Error inserting metering record into DynamoDB: %v", err)
                 return
             }
+            log.Printf("Successfully uploaded record for customer %s to DynamoDB from date: %d", config.CustomerIdentifier, naturalHourEnd)
         }
     }
 }
@@ -150,17 +164,20 @@ func createMeteringRecord(timestamp int64, customerIdentifier string, dimensions
 	var dimensionUsage []struct{ Dimension string; Value int64 }
 
 	for _, dimension := range dimensions {
-		_, _, err := promcli.RunPromQuery(promAPI, dimension.PromQuery, timestamp)
+		// metricValue, _, err := promcli.RunPromQuery(promAPI, dimension.PromQuery, timestamp)
+        _, _, err := promcli.RunPromQuery(promAPI, dimension.PromQuery, timestamp)
 		if err != nil {
             humanReadableTimestamp := time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
-			log.Printf("Error querying %s with %s at %s: %v", dimension.Name, dimension.PromQuery, humanReadableTimestamp, err)
+			log.Printf("Error querying %s with expression %s and timestamp %s: %v", dimension.Name, dimension.PromQuery, humanReadableTimestamp, err)
 		}
 
 		dimensionUsage = append(dimensionUsage, struct{ Dimension string; Value int64 }{
 			Dimension: dimension.Name,
-			Value:     1,
+            Value:     1,
+			// Value:     metricValue,
 		})
 	}
+
 	return &awscli.MeteringRecord{
 		CreateTimestamp:    timestamp,
 		CustomerIdentifier: customerIdentifier,

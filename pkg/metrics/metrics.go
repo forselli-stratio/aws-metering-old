@@ -3,10 +3,10 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-    PrometheusQuerySuccessesTotal = prometheus.NewCounterVec(
+    PrometheusQueryOperationsTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
-            Name: "aws_metering_prometheus_query_successes_total",
-            Help: "The total number of succeded querys to Prometheus.",
+            Name: "aws_metering_prometheus_query_operations_total",
+            Help: "The total number of query operations to Prometheus.",
         },
         []string{"query"}, // Labels to indicate response status code and query performed
     )
@@ -18,22 +18,24 @@ var (
         []string{"query"}, // Labels to indicate response status code and query performed
     )
 	// New Prometheus metrics for DynamoDB operations
-	DynamoDBErrorsTotal = prometheus.NewCounter(
+	DynamoDBErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "aws_metering_dynamodb_errors_total",
 			Help: "The total number of errors in DynamoDB operations.",
 		},
+        []string{"operation"}, // Labels to indicate response status code and query performed
 	)
-	DynamoDBOperationsTotal = prometheus.NewCounter(
+	DynamoDBOperationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "aws_metering_dynamodb_operations_total",
 			Help: "The total number of operations in DynamoDB.",
 		},
+        []string{"operation"}, // Labels to indicate response status code and query performed
 	)
 )
 
 func RegisterMetrics() {
-    prometheus.MustRegister(PrometheusQuerySuccessesTotal)
+    prometheus.MustRegister(PrometheusQueryOperationsTotal)
     prometheus.MustRegister(PrometheusQueryErrorsTotal)
 	prometheus.MustRegister(DynamoDBErrorsTotal)
 	prometheus.MustRegister(DynamoDBOperationsTotal)

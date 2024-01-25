@@ -70,9 +70,10 @@ func CheckIfRecordExists(customerIdentifier string, startTime, endTime int64) bo
 
     // Perform the query
     result, err := dynamoDBClient.Query(queryInput)
+	metrics.DynamoDBOperationsTotal.WithLabelValues("query").Inc()
     if err!= nil {
 		log.Printf("Error querying DynamoDB for existing records: %s", err)
-		metrics.DynamoDBErrorsTotal.Inc()
+		metrics.DynamoDBErrorsTotal.WithLabelValues("query").Inc()
 		return false
 	}
 
@@ -136,6 +137,10 @@ func InsertMeteringRecord(record *MeteringRecord) error {
 	_, err := dynamoDBClient.PutItem(input)
 
 	// Update metrics with DynamoDB operation status
-	metrics.DynamoDBOperationsTotal.Inc()
+	metrics.DynamoDBOperationsTotal.WithLabelValues("putItem").Inc()
+    if err!= nil {
+		log.Printf("Error creating DynamoDB item: %s", err)
+		metrics.DynamoDBErrorsTotal.WithLabelValues("putItem").Inc()
+	}
 	return err
 }

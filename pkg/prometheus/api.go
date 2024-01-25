@@ -33,6 +33,8 @@ func RunPromQuery(promAPI v1.API, query string, timestamp int64) (int64, time.Ti
 
 	// Execute Prometheus query with the provided timestamp
 	result, warnings, err := promAPI.Query(ctx, query, time.Unix(timestamp, 0), v1.WithTimeout(5*time.Second))
+	// Increment Prometheus query success metric
+	metrics.PrometheusQueryOperationsTotal.WithLabelValues(query).Inc()
 	if err != nil {
 		// Increment Prometheus query error metric
 		metrics.PrometheusQueryErrorsTotal.WithLabelValues(query).Inc()
@@ -56,7 +58,5 @@ func RunPromQuery(promAPI v1.API, query string, timestamp int64) (int64, time.Ti
 	metricValue := int64(vector[0].Value)
 	metricTimestamp := vector[0].Timestamp.Time()
 
-	// Increment Prometheus query success metric
-	metrics.PrometheusQuerySuccessesTotal.WithLabelValues(query).Inc()
 	return metricValue, metricTimestamp, nil
 }

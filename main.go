@@ -40,7 +40,7 @@ func main() {
 
 	// Register the metrics endpoint for Prometheus.
 	http.Handle(config.MetricsEndpoint, promhttp.Handler())
-	go startServer(config.ListenAddress)
+	go startServer(config.ListenAddress, config.MetricsEndpoint)
 
 	// Initialize DynamoDB client.
 	awscli.InitDynamoDB()
@@ -55,13 +55,13 @@ func main() {
 // loadConfig loads the configurations from environment variables or default values.
 func loadConfig() (Config, error) {
     // Retrieve mandatory configuration parameters from environment variables
-    prometheusURL := os.Getenv("PROMETHEUS_URL")
-    customerIdentifier := os.Getenv("CUSTOMER_IDENTIFIER")
-    interval := os.Getenv("INTERVAL")
+    prometheusURL := os.Getenv("AWS_METERING_PROMETHEUS_URL")
+    customerIdentifier := os.Getenv("AWS_METERING_CUSTOMER_IDENTIFIER")
+    interval := os.Getenv("AWS_METERING_INTERVAL")
 
     // Check if mandatory environment variables are set
     if prometheusURL == "" || customerIdentifier == "" || interval == "" {
-        return Config{}, fmt.Errorf("missing required environment variables 'PROMETHEUS_URL', 'CUSTOMER_IDENTIFIER', or 'INTERVAL'")
+        return Config{}, fmt.Errorf("missing required environment variables 'AWS_METERING_PROMETHEUS_URL', 'AWS_METERING_CUSTOMER_IDENTIFIER', or 'AWS_METERING_INTERVAL'")
     }
 
 	// Schedule repeated execution at the specified interval.
@@ -71,8 +71,8 @@ func loadConfig() (Config, error) {
 	}
 
     // Set defaults for optional parameters if they are not provided
-    metricsEndpoint := getEnv("METRICS_ENDPOINT", "/metrics")
-    listenAddress := getEnv("LISTEN_ADDRESS", ":8080")
+    metricsEndpoint := getEnv("AWS_METERING_METRICS_ENDPOINT", "/metrics")
+    listenAddress := getEnv("AWS_METERING_LISTEN_ADDRESS", ":8080")
 
     config := Config{
         PrometheusURL: prometheusURL,
@@ -94,16 +94,15 @@ func getEnv(key, fallback string) string {
 }
 
 // startServer starts the HTTP server for Prometheus metrics.
-func startServer(listenAddress string) {
-    log.Printf("HTTP server listening on %s", listenAddress)
+func startServer(listenAddress, metricsEndpoint string) {
+    log.Printf("HTTP server for Prometheus metrics listening on port %s and path %s", listenAddress, metricsEndpoint)
     if err := http.ListenAndServe(listenAddress, nil); err != nil {
-        log.Fatalf("HTTP server failed to start: %v", err)
+        log.Fatalf("HTTP server for Prometheus metrics failed to start: %v", err)
     }
 }
 
 func schedule(interval *time.Duration, config Config) {
     // Execute once immediately.
-    log.Printf("Uploading data to DynamoDB.")
     run(config)
 
 	// Continue with scheduled execution.
@@ -116,47 +115,65 @@ func schedule(interval *time.Duration, config Config) {
 
 // run performs the main execution logic, fetching metrics and sending metering records to AWS.
 func run(config Config) {
-    currentTime := time.Now()
-    // Round down to the nearest hour
-    roundedCurrentTime := currentTime.Truncate(time.Hour)
+	currentTime := time.Now()
 
-    for i := 1; i <= 6; i++ {
-        // Calculate the start of each past natural hour
-        naturalHourStart := roundedCurrentTime.Add(-time.Duration(i) * time.Hour)
-        naturalHourEnd := naturalHourStart.Add(time.Hour).Unix()
+	for h := 0; h < 6; h++ { // iterate over the past 6 hours
+		// Round down to the nearest 10 minutes for each hour
+		roundedCurrentTime := currentTime.Add(-time.Duration(h) * time.Hour).Truncate(10 * time.Minute)
 
-        // Check if there is already a record for this interval in DynamoDB
-        if !awscli.CheckIfRecordExists(config.CustomerIdentifier, naturalHourStart.Unix(), naturalHourEnd) {
-            // Run the Prometheus query for this specific hour
-            promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
-            if err != nil {
-                log.Printf("Error creating Prometheus client: %v", err)
-                continue
+		for i := 1; i < 7; i++ { // 6 intervals per hour excluding the current interval
+			// Calculate the start of each 10-minute interval
+			intervalStart := roundedCurrentTime.Add(-time.Duration(i) * 10 * time.Minute)
+			intervalEnd := intervalStart.Add(10 * time.Minute)
+
+            // Check if there is already a record for this interval in DynamoDB
+            if !awscli.CheckIfRecordExists(config.CustomerIdentifier, intervalStart.Unix(), intervalEnd.Unix()) {
+                // Run the Prometheus query for this specific hour
+                promAPI, err := promcli.InitPrometheusAPI(config.PrometheusURL)
+                if err != nil {
+                    log.Printf("Error creating Prometheus client: %v", err)
+                    continue
+                }
+
+                dimensions := []Dimension{
+                    {"cpu", "billing:cpu_capacity:last1h"},
+                    {"memory", "billing:mem_capacity:last1h"},
+                    {"storage", "billing:storage_capacity:last1h"},
+                }
+
+                // Using the end time of the natural hour as the timestamp for the query
+                meteringRecord := createMeteringRecord(intervalEnd.Unix(), config.CustomerIdentifier, dimensions, promAPI)
+                fmt.Println(meteringRecord)
+                // Check if dimension_usage is empty or has less than 3 items
+                if len(meteringRecord.DimensionUsage) < len(dimensions) {
+                    log.Printf("Skipping metering record upload to DynamoDB as dimension_usage field is empty or incomplete.")
+                    continue
+                }
+
+                // Check if any of the dimension_usage values is 0 (prometheus query returns 0 on error)
+                isNullDimension := false
+                for _, dimension := range meteringRecord.DimensionUsage {
+                    if dimension.Value == 0 {
+                        isNullDimension=true
+                        break
+                    }
+                }
+
+                if isNullDimension {
+                    log.Printf("Skipping metering record upload to DynamoDB as one or more dimension values are 0.")
+                    continue
+                }
+
+                // Insert metering record into DynamoDB
+                if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
+                    log.Printf("Error inserting metering record into DynamoDB: %v", err)
+                    continue
+                }
+                humanReadableIntervalEnd := intervalEnd.Format("2006-01-02 15:04:05")
+                log.Printf("Successfully uploaded record for customer %s to DynamoDB from date: %s", config.CustomerIdentifier, humanReadableIntervalEnd)
             }
-
-            dimensions := []Dimension{
-                {"cpu", "billing:cpu_capacity:last1h"},
-                {"memory", "billing:mem_capacity:last1h"},
-                {"storage", "billing:storage_capacity:last1h"},
-            }
-
-            // Using the end time of the natural hour as the timestamp for the query
-            meteringRecord := createMeteringRecord(naturalHourEnd, config.CustomerIdentifier, dimensions, promAPI)
-            fmt.Println(meteringRecord)
-            // Check if dimension_usage is empty or has less than 3 items
-            if len(meteringRecord.DimensionUsage) < len(dimensions) {
-                log.Printf("Skipping metering record upload to DynamoDB as dimension_usage is empty or incomplete.")
-            }
-
-            // Insert metering record into DynamoDB
-            if err := awscli.InsertMeteringRecord(meteringRecord); err != nil {
-                metrics.DynamoDBErrorsTotal.Inc()
-                log.Printf("Error inserting metering record into DynamoDB: %v", err)
-                return
-            }
-            log.Printf("Successfully uploaded record for customer %s to DynamoDB from date: %d", config.CustomerIdentifier, naturalHourEnd)
-        }
-    }
+		}
+	}
 }
 
 // createMeteringRecord constructs a metering record directly from the Prometheus query results.
